@@ -4,9 +4,11 @@
 #include <QMutex>
 #include <QStandardPaths>
 
-const QString Settings::KEY_DOWNLOAD_DIR = "download_dir";
-const QString Settings::KEY_RESUME_DIR   = "resume_dir";
-const QString Settings::KEY_LISTEN_PORT  = "listen_port";
+const QString Settings::KEY_DOWNLOAD_DIR         = "download_dir";
+const QString Settings::KEY_RESUME_DIR           = "resume_dir";
+const QString Settings::KEY_LISTEN_PORT          = "listen_port";
+const QString Settings::KEY_CONTROL_BIND_ADDRESS = "control_bind_address";
+const QString Settings::KEY_CONTROL_LISTEN_PORT  = "control_listen_port";
 
 Settings* Settings::instance()
 {

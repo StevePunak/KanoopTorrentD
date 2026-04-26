@@ -94,10 +94,9 @@ int main(int argc, char* argv[])
         return 1;
     }
 
-    KanoopTorrentDaemon daemon;
-    daemon.start();
+    KanoopTorrentDaemon::instance()->start();
 
     int rc = application.exec();
-    daemon.stop(TimeSpan::fromSeconds(5));
+    KanoopTorrentDaemon::instance()->stop(TimeSpan::fromSeconds(5));
     return rc;
 }
