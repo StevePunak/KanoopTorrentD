@@ -19,6 +19,9 @@
 #include <Kanoop/torrent/torrentsearchresult.h>
 
 #include "buildinfo.h"
+#include "json/adminbodies.h"
+#include "json/operationresult.h"
+#include "json/torrentbodies.h"
 #include "kanooptorrentdaemon.h"
 #include "settings.h"
 
@@ -121,6 +124,16 @@ void TorrentControlServer::threadFinished()
     logText(LVL_INFO, "Control server stopped");
 }
 
+namespace {
+
+QHttpServerResponse errorResponse(const QString& message,
+                                  QHttpServerResponder::StatusCode code = QHttpServerResponder::StatusCode::BadRequest)
+{
+    return QHttpServerResponse(OperationResult(false, message).serializeToJson(), code);
+}
+
+} // namespace
+
 QHttpServerResponse TorrentControlServer::handleHealth(const QHttpServerRequest& request)
 {
     Q_UNUSED(request)
@@ -135,25 +148,15 @@ QHttpServerResponse TorrentControlServer::handleHealth(const QHttpServerRequest&
                               Qt::BlockingQueuedConnection,
                               Q_RETURN_ARG(qint64, uptimeSeconds));
 
-    QJsonObject body;
-    body["status"] = "ok";
-    body["started_at"] = startedAt.toString(Qt::ISODate);
-    body["uptime_seconds"] = static_cast<qint64>(uptimeSeconds);
-
-    return QHttpServerResponse(QJsonDocument(body).toJson(QJsonDocument::Compact));
+    return QHttpServerResponse(HealthResponseBody("ok", startedAt, uptimeSeconds).serializeToJson());
 }
 
 QHttpServerResponse TorrentControlServer::handleVersion(const QHttpServerRequest& request)
 {
     Q_UNUSED(request)
 
-    QJsonObject body;
-    body["version"] = BUILD_VERSION_STR;
-    body["git_sha"] = BUILD_GIT_SHA_STR;
-    body["build_timestamp"] = BUILD_TIMESTAMP_STR;
-    body["qt_version"] = qVersion();
-
-    return QHttpServerResponse(QJsonDocument(body).toJson(QJsonDocument::Compact));
+    return QHttpServerResponse(VersionResponseBody(BUILD_VERSION_STR, BUILD_GIT_SHA_STR,
+                                                   BUILD_TIMESTAMP_STR, qVersion()).serializeToJson());
 }
 
 QHttpServerResponse TorrentControlServer::handleSettingsGet(const QHttpServerRequest& request)
@@ -161,14 +164,13 @@ QHttpServerResponse TorrentControlServer::handleSettingsGet(const QHttpServerReq
     Q_UNUSED(request)
 
     Settings* settings = Settings::instance();
-    QJsonObject body;
-    body["download_dir"] = settings->downloadDirectory();
-    body["resume_dir"] = settings->resumeDataDirectory();
-    body["listen_port"] = settings->listenPort();
-    body["control_bind_address"] = settings->controlBindAddress();
-    body["control_listen_port"] = settings->controlListenPort();
-
-    return QHttpServerResponse(QJsonDocument(body).toJson(QJsonDocument::Compact));
+    SettingsBody body;
+    body.setDownloadDirectory(settings->downloadDirectory());
+    body.setResumeDataDirectory(settings->resumeDataDirectory());
+    body.setListenPort(settings->listenPort());
+    body.setControlBindAddress(settings->controlBindAddress());
+    body.setControlListenPort(settings->controlListenPort());
+    return QHttpServerResponse(body.serializeToJson());
 }
 
 QHttpServerResponse TorrentControlServer::handleSettingsPut(const QHttpServerRequest& request)
@@ -176,65 +178,55 @@ QHttpServerResponse TorrentControlServer::handleSettingsPut(const QHttpServerReq
     QJsonParseError parseError;
     QJsonDocument doc = QJsonDocument::fromJson(request.body(), &parseError);
     if(parseError.error != QJsonParseError::NoError || !doc.isObject()) {
-        QJsonObject err;
-        err["error"] = QString("Invalid JSON: %1").arg(parseError.errorString());
-        return QHttpServerResponse(QJsonDocument(err).toJson(QJsonDocument::Compact),
-                                   QHttpServerResponder::StatusCode::BadRequest);
+        return errorResponse(QString("Invalid JSON: %1").arg(parseError.errorString()));
     }
 
-    QJsonObject in = doc.object();
+    SettingsBody updates;
+    updates.deserializeFromJsonObject(doc.object());
+
     Settings* settings = Settings::instance();
+    SettingsUpdateResultBody result;
 
-    QJsonArray applied;
-    QJsonArray requiresRestart;
-
-    if(in.contains("download_dir")) {
-        settings->setDownloadDirectory(in.value("download_dir").toString());
-        applied.append("download_dir");
-        requiresRestart.append("download_dir");
+    if(updates.hasDownloadDirectory()) {
+        settings->setDownloadDirectory(updates.downloadDirectory());
+        result.addApplied("download_dir");
+        result.addRequiresRestart("download_dir");
     }
-    if(in.contains("resume_dir")) {
-        settings->setResumeDataDirectory(in.value("resume_dir").toString());
-        applied.append("resume_dir");
-        requiresRestart.append("resume_dir");
+    if(updates.hasResumeDataDirectory()) {
+        settings->setResumeDataDirectory(updates.resumeDataDirectory());
+        result.addApplied("resume_dir");
+        result.addRequiresRestart("resume_dir");
     }
-    if(in.contains("listen_port")) {
-        settings->setListenPort(in.value("listen_port").toInt());
-        applied.append("listen_port");
-        requiresRestart.append("listen_port");
+    if(updates.hasListenPort()) {
+        settings->setListenPort(updates.listenPort());
+        result.addApplied("listen_port");
+        result.addRequiresRestart("listen_port");
     }
-    if(in.contains("control_bind_address")) {
-        settings->setControlBindAddress(in.value("control_bind_address").toString());
-        applied.append("control_bind_address");
-        requiresRestart.append("control_bind_address");
+    if(updates.hasControlBindAddress()) {
+        settings->setControlBindAddress(updates.controlBindAddress());
+        result.addApplied("control_bind_address");
+        result.addRequiresRestart("control_bind_address");
     }
-    if(in.contains("control_listen_port")) {
-        settings->setControlListenPort(in.value("control_listen_port").toInt());
-        applied.append("control_listen_port");
-        requiresRestart.append("control_listen_port");
+    if(updates.hasControlListenPort()) {
+        settings->setControlListenPort(updates.controlListenPort());
+        result.addApplied("control_listen_port");
+        result.addRequiresRestart("control_listen_port");
     }
     settings->sync();
 
-    QJsonObject body;
-    body["applied"] = applied;
-    body["requires_restart"] = requiresRestart;
-    body["errors"] = QJsonArray();
-
-    return QHttpServerResponse(QJsonDocument(body).toJson(QJsonDocument::Compact));
+    return QHttpServerResponse(result.serializeToJson());
 }
 
 QHttpServerResponse TorrentControlServer::handleSearch(const QHttpServerRequest& request)
 {
     QString query = QUrlQuery(request.url().query()).queryItemValue("q");
     if(query.isEmpty()) {
-        QJsonObject err;
-        err["error"] = "missing q parameter";
-        return QHttpServerResponse(QJsonDocument(err).toJson(QJsonDocument::Compact),
-                                   QHttpServerResponder::StatusCode::BadRequest);
+        return errorResponse("missing q parameter");
     }
 
     TorrentSearcher searcher;
-    QJsonArray resultsArray;
+    SearchResponseBody body;
+    body.setQuery(query);
     QString errorMessage;
     bool succeeded = false;
     QEventLoop loop;
@@ -243,18 +235,7 @@ QHttpServerResponse TorrentControlServer::handleSearch(const QHttpServerRequest&
                      [&](const QList<TorrentSearchResult>& results) {
         succeeded = true;
         for(const TorrentSearchResult& r : results) {
-            QJsonObject row;
-            row["name"] = r.name();
-            row["info_hash"] = r.infoHash();
-            row["size"] = r.size();
-            row["size_human"] = TorrentSearchResult::formatSize(r.size());
-            row["seeders"] = r.seeders();
-            row["leechers"] = r.leechers();
-            row["added_date"] = r.addedDate().toString(Qt::ISODate);
-            row["category"] = r.category();
-            row["uploader_name"] = r.uploaderName();
-            row["magnet"] = r.toMagnetLink().toUri();
-            resultsArray.append(row);
+            body.appendResult(SearchResultRow(r));
         }
         loop.quit();
     });
@@ -268,45 +249,29 @@ QHttpServerResponse TorrentControlServer::handleSearch(const QHttpServerRequest&
     loop.exec();
 
     if(!succeeded) {
-        QJsonObject err;
-        err["error"] = errorMessage;
-        return QHttpServerResponse(QJsonDocument(err).toJson(QJsonDocument::Compact),
-                                   QHttpServerResponder::StatusCode::BadGateway);
+        return errorResponse(errorMessage, QHttpServerResponder::StatusCode::BadGateway);
     }
 
-    QJsonObject body;
-    body["query"] = query;
-    body["results"] = resultsArray;
-    return QHttpServerResponse(QJsonDocument(body).toJson(QJsonDocument::Compact));
+    return QHttpServerResponse(body.serializeToJson());
 }
 
 QHttpServerResponse TorrentControlServer::handleAddTorrent(const QHttpServerRequest& request)
 {
-    QJsonParseError parseError;
-    QJsonDocument doc = QJsonDocument::fromJson(request.body(), &parseError);
-    if(parseError.error != QJsonParseError::NoError || !doc.isObject()) {
-        QJsonObject err;
-        err["error"] = QString("Invalid JSON: %1").arg(parseError.errorString());
-        return QHttpServerResponse(QJsonDocument(err).toJson(QJsonDocument::Compact),
-                                   QHttpServerResponder::StatusCode::BadRequest);
-    }
-
-    QString magnet = doc.object().value("magnet").toString();
-    if(magnet.isEmpty()) {
-        QJsonObject err;
-        err["error"] = "missing magnet";
-        return QHttpServerResponse(QJsonDocument(err).toJson(QJsonDocument::Compact),
-                                   QHttpServerResponder::StatusCode::BadRequest);
+    AddTorrentRequestBody requestBody(request.body());
+    if(requestBody.magnet().isEmpty()) {
+        return errorResponse("missing magnet");
     }
 
     QJsonObject result;
     QMetaObject::invokeMethod(KanoopTorrentDaemon::instance(), "addMagnet",
                               Qt::BlockingQueuedConnection,
                               Q_RETURN_ARG(QJsonObject, result),
-                              Q_ARG(QString, magnet));
+                              Q_ARG(QString, requestBody.magnet()));
 
-    if(result.contains("error")) {
-        return QHttpServerResponse(QJsonDocument(result).toJson(QJsonDocument::Compact),
+    OperationResult opResult;
+    opResult.deserializeFromJsonObject(result);
+    if(!opResult.success() && result.contains("success")) {
+        return QHttpServerResponse(opResult.serializeToJson(),
                                    QHttpServerResponder::StatusCode::BadRequest);
     }
 

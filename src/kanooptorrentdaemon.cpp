@@ -7,6 +7,8 @@
 #include <Kanoop/torrent/torrent.h>
 #include <Kanoop/torrent/torrentclient.h>
 
+#include "json/operationresult.h"
+#include "json/torrentbodies.h"
 #include "settings.h"
 #include "torrentcontrolserver.h"
 
@@ -38,27 +40,21 @@ qint64 KanoopTorrentDaemon::uptimeSeconds() const
 
 QJsonObject KanoopTorrentDaemon::addMagnet(const QString& magnetUri)
 {
-    QJsonObject result;
     if(_client == nullptr) {
-        result["error"] = "client not initialized";
-        return result;
+        return OperationResult(false, "client not initialized").serializeToJsonObject();
     }
 
     MagnetLink link(magnetUri);
     if(link.isValid() == false) {
-        result["error"] = "invalid magnet URI";
-        return result;
+        return OperationResult(false, "invalid magnet URI").serializeToJsonObject();
     }
 
     Torrent* torrent = _client->addTorrent(link);
     if(torrent == nullptr) {
-        result["error"] = "add failed (duplicate or invalid)";
-        return result;
+        return OperationResult(false, "add failed (duplicate or invalid)").serializeToJsonObject();
     }
 
-    result["info_hash"] = link.infoHashHex();
-    result["display_name"] = link.displayName();
-    return result;
+    return AddTorrentResponseBody(link.infoHashHex(), link.displayName()).serializeToJsonObject();
 }
 
 void KanoopTorrentDaemon::threadStarted()
