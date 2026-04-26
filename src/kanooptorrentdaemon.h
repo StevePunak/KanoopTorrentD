@@ -2,6 +2,7 @@
 #define KANOOPTORRENTDAEMON_H
 
 #include <QDateTime>
+#include <QJsonObject>
 
 #include <Kanoop/utility/abstractthreadclass.h>
 
@@ -15,6 +16,8 @@ public:
 
     Q_INVOKABLE QDateTime startedAt() const { return _startedAt; }
     Q_INVOKABLE qint64 uptimeSeconds() const;
+
+    Q_INVOKABLE QJsonObject addMagnet(const QString& magnetUri);
 
 private:
     KanoopTorrentDaemon();

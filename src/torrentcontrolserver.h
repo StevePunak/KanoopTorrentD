@@ -24,6 +24,8 @@ private:
     QHttpServerResponse handleVersion(const QHttpServerRequest& request);
     QHttpServerResponse handleSettingsGet(const QHttpServerRequest& request);
     QHttpServerResponse handleSettingsPut(const QHttpServerRequest& request);
+    QHttpServerResponse handleSearch(const QHttpServerRequest& request);
+    QHttpServerResponse handleAddTorrent(const QHttpServerRequest& request);
 
     QHttpServer* _httpServer = nullptr;
     QTcpServer* _tcpServer = nullptr;

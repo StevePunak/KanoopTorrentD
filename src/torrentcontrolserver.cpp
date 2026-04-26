@@ -11,7 +11,12 @@
 #include <QTcpServer>
 #include <QtConcurrent/QtConcurrent>
 
+#include <QEventLoop>
+#include <QUrlQuery>
+
 #include <Kanoop/commonexception.h>
+#include <Kanoop/torrent/torrentsearcher.h>
+#include <Kanoop/torrent/torrentsearchresult.h>
 
 #include "buildinfo.h"
 #include "kanooptorrentdaemon.h"
@@ -74,6 +79,22 @@ void TorrentControlServer::threadStarted()
                 [this](const QHttpServerRequest& request) {
             return QtConcurrent::run([this, request]() {
                 return this->handleSettingsPut(request);
+            });
+        });
+
+        _httpServer->route(
+                "/torrents/search", QHttpServerRequest::Method::Get,
+                [this](const QHttpServerRequest& request) {
+            return QtConcurrent::run([this, request]() {
+                return this->handleSearch(request);
+            });
+        });
+
+        _httpServer->route(
+                "/torrents", QHttpServerRequest::Method::Post,
+                [this](const QHttpServerRequest& request) {
+            return QtConcurrent::run([this, request]() {
+                return this->handleAddTorrent(request);
             });
         });
 
@@ -200,4 +221,94 @@ QHttpServerResponse TorrentControlServer::handleSettingsPut(const QHttpServerReq
     body["errors"] = QJsonArray();
 
     return QHttpServerResponse(QJsonDocument(body).toJson(QJsonDocument::Compact));
+}
+
+QHttpServerResponse TorrentControlServer::handleSearch(const QHttpServerRequest& request)
+{
+    QString query = QUrlQuery(request.url().query()).queryItemValue("q");
+    if(query.isEmpty()) {
+        QJsonObject err;
+        err["error"] = "missing q parameter";
+        return QHttpServerResponse(QJsonDocument(err).toJson(QJsonDocument::Compact),
+                                   QHttpServerResponder::StatusCode::BadRequest);
+    }
+
+    TorrentSearcher searcher;
+    QJsonArray resultsArray;
+    QString errorMessage;
+    bool succeeded = false;
+    QEventLoop loop;
+
+    QObject::connect(&searcher, &TorrentSearcher::searchComplete, &searcher,
+                     [&](const QList<TorrentSearchResult>& results) {
+        succeeded = true;
+        for(const TorrentSearchResult& r : results) {
+            QJsonObject row;
+            row["name"] = r.name();
+            row["info_hash"] = r.infoHash();
+            row["size"] = r.size();
+            row["size_human"] = TorrentSearchResult::formatSize(r.size());
+            row["seeders"] = r.seeders();
+            row["leechers"] = r.leechers();
+            row["added_date"] = r.addedDate().toString(Qt::ISODate);
+            row["category"] = r.category();
+            row["uploader_name"] = r.uploaderName();
+            row["magnet"] = r.toMagnetLink().toUri();
+            resultsArray.append(row);
+        }
+        loop.quit();
+    });
+    QObject::connect(&searcher, &TorrentSearcher::searchFailed, &searcher,
+                     [&](const QString& msg) {
+        errorMessage = msg;
+        loop.quit();
+    });
+
+    searcher.search(query);
+    loop.exec();
+
+    if(!succeeded) {
+        QJsonObject err;
+        err["error"] = errorMessage;
+        return QHttpServerResponse(QJsonDocument(err).toJson(QJsonDocument::Compact),
+                                   QHttpServerResponder::StatusCode::BadGateway);
+    }
+
+    QJsonObject body;
+    body["query"] = query;
+    body["results"] = resultsArray;
+    return QHttpServerResponse(QJsonDocument(body).toJson(QJsonDocument::Compact));
+}
+
+QHttpServerResponse TorrentControlServer::handleAddTorrent(const QHttpServerRequest& request)
+{
+    QJsonParseError parseError;
+    QJsonDocument doc = QJsonDocument::fromJson(request.body(), &parseError);
+    if(parseError.error != QJsonParseError::NoError || !doc.isObject()) {
+        QJsonObject err;
+        err["error"] = QString("Invalid JSON: %1").arg(parseError.errorString());
+        return QHttpServerResponse(QJsonDocument(err).toJson(QJsonDocument::Compact),
+                                   QHttpServerResponder::StatusCode::BadRequest);
+    }
+
+    QString magnet = doc.object().value("magnet").toString();
+    if(magnet.isEmpty()) {
+        QJsonObject err;
+        err["error"] = "missing magnet";
+        return QHttpServerResponse(QJsonDocument(err).toJson(QJsonDocument::Compact),
+                                   QHttpServerResponder::StatusCode::BadRequest);
+    }
+
+    QJsonObject result;
+    QMetaObject::invokeMethod(KanoopTorrentDaemon::instance(), "addMagnet",
+                              Qt::BlockingQueuedConnection,
+                              Q_RETURN_ARG(QJsonObject, result),
+                              Q_ARG(QString, magnet));
+
+    if(result.contains("error")) {
+        return QHttpServerResponse(QJsonDocument(result).toJson(QJsonDocument::Compact),
+                                   QHttpServerResponder::StatusCode::BadRequest);
+    }
+
+    return QHttpServerResponse(QJsonDocument(result).toJson(QJsonDocument::Compact));
 }

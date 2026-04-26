@@ -3,6 +3,8 @@
 #include <QDir>
 #include <QMutex>
 
+#include <Kanoop/torrent/magnetlink.h>
+#include <Kanoop/torrent/torrent.h>
 #include <Kanoop/torrent/torrentclient.h>
 
 #include "settings.h"
@@ -32,6 +34,31 @@ qint64 KanoopTorrentDaemon::uptimeSeconds() const
         return 0;
     }
     return _startedAt.secsTo(QDateTime::currentDateTimeUtc());
+}
+
+QJsonObject KanoopTorrentDaemon::addMagnet(const QString& magnetUri)
+{
+    QJsonObject result;
+    if(_client == nullptr) {
+        result["error"] = "client not initialized";
+        return result;
+    }
+
+    MagnetLink link(magnetUri);
+    if(link.isValid() == false) {
+        result["error"] = "invalid magnet URI";
+        return result;
+    }
+
+    Torrent* torrent = _client->addTorrent(link);
+    if(torrent == nullptr) {
+        result["error"] = "add failed (duplicate or invalid)";
+        return result;
+    }
+
+    result["info_hash"] = link.infoHashHex();
+    result["display_name"] = link.displayName();
+    return result;
 }
 
 void KanoopTorrentDaemon::threadStarted()
